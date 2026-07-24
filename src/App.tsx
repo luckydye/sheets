@@ -191,31 +191,23 @@ export default function App() {
 
   if (!model) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-gray-500">
-        {error ? (
-          <pre className="max-w-full whitespace-pre-wrap text-left text-red-600">
-            {error}
-          </pre>
-        ) : (
-          "Loading engine…"
-        )}
+      <div className="center-screen">
+        {error ? <pre className="error-text">{error}</pre> : "Loading engine…"}
       </div>
     );
   }
 
   return (
     <div
-      className="ironcalc-host h-full"
+      className="ironcalc-host"
       onKeyDownCapture={onHostKeyDown}
       onPasteCapture={markDirty}
       onCutCapture={markDirty}
     >
       <IronCalc key={modelId} model={model} />
       {dragging && (
-        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center bg-blue-500/10 ring-4 ring-inset ring-blue-500/60">
-          <div className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-lg">
-            Drop a .xlsx or .ic file to open
-          </div>
+        <div className="drop-overlay">
+          <div className="drop-badge">Drop a .xlsx or .ic file to open</div>
         </div>
       )}
       {error && (
@@ -223,7 +215,7 @@ export default function App() {
           type="button"
           onClick={() => setError(null)}
           title="Click to dismiss"
-          className="absolute bottom-4 left-4 z-50 max-w-[70%] truncate rounded bg-red-600 px-3 py-1.5 text-left text-sm text-white shadow-lg"
+          className="toast"
         >
           {error}
         </button>

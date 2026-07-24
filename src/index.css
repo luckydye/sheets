@@ -1,5 +1,3 @@
-@import "tailwindcss";
-
 /* IronCalc's UI is styled with "Inter"; without these faces it falls back to a
    serif font. Fonts are bundled by Vite from src/fonts. */
 @font-face {
@@ -17,14 +15,18 @@
   src: url("./fonts/inter-v13-latin-600.woff2") format("woff2");
 }
 
+/* Match the CSS baseline IronCalc expects (default content-box box model — do
+   NOT introduce a global `box-sizing: border-box` reset, it misaligns the
+   canvas grid overlays). */
 html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-}
-
 body {
+  margin: 0;
+  padding: 0;
+  overscroll-behavior: none;
+}
+body {
+  inset: 0;
+  overflow: hidden;
   font-family:
     "Inter",
     system-ui,
@@ -32,12 +34,90 @@ body {
     "Segoe UI",
     Roboto,
     sans-serif;
-  overflow: hidden;
+}
+#root {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: none;
 }
 
-/* IronCalc's grid fills whatever box we give it. */
+/* App shell: the IronCalc grid fills this box; overlays anchor to it. */
 .ironcalc-host {
   position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
+  width: 100%;
+  height: 100%;
+  /* Suppress the native text-selection highlight that otherwise flickers in
+     while drag-selecting cells. Editable fields opt back in below. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ironcalc-host input,
+.ironcalc-host textarea,
+.ironcalc-host [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Loading / fatal-error screen */
+.center-screen {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 14px;
+  color: #6b7280;
+}
+.error-text {
+  max-width: 100%;
+  margin: 0;
+  white-space: pre-wrap;
+  text-align: left;
+  color: #dc2626;
+}
+
+/* Transient error toast */
+.toast {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 50;
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 14px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.2);
+}
+
+/* Drag-and-drop overlay */
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(59 130 246 / 0.1);
+  box-shadow: inset 0 0 0 4px rgb(59 130 246 / 0.6);
+}
+.drop-badge {
+  border-radius: 8px;
+  padding: 8px 16px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.2);
 }

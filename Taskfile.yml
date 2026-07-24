@@ -1,0 +1,31 @@
+# https://taskfile.dev
+
+version: "3"
+
+tasks:
+  default:
+    silent: true
+    cmd: task -l --sort none
+
+  setup:
+    desc: "Install JS dependencies"
+    cmd: bun install --frozen-lockfile
+
+  dev:
+    desc: "Run the Tauri app in development (hot-reloading frontend)"
+    deps: [setup]
+    cmd: bun run tauri dev
+
+  build:
+    desc: "Build a native app bundle"
+    deps: [setup]
+    cmd: bun run tauri build
+
+  web:
+    desc: "Run just the Vite frontend in a browser (no native shell)"
+    deps: [setup]
+    cmd: bun run dev
+
+  vendor:
+    desc: "Rebuild the vendored IronCalc wasm + UI from source (tag v0.7.1)"
+    cmd: ./scripts/build-ironcalc.sh

@@ -1,0 +1,25 @@
+{
+  "name": "@ironcalc/workbook",
+  "type": "module",
+  "description": "IronCalc React spreadsheet UI (vendored, built from source at tag v0.7.1)",
+  "version": "0.7.1",
+  "license": "MIT/Apache-2.0",
+  "main": "./dist/ironcalc.js",
+  "module": "./dist/ironcalc.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "peerDependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@ironcalc/wasm": "0.7.1",
+    "@mui/material": "^7.3.7",
+    "i18next": "^25.7.4",
+    "lucide-react": "^0.562.0",
+    "react": "^18 || ^19",
+    "react-dom": "^18 || ^19",
+    "react-i18next": "^16.5.3"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@ironcalc/wasm",
+  "type": "module",
+  "description": "IronCalc Web bindings (vendored, built from source at tag v0.7.1)",
+  "version": "0.7.1",
+  "license": "MIT/Apache-2.0",
+  "files": [
+    "wasm_bg.wasm",
+    "wasm.js",
+    "wasm.d.ts",
+    "wasm_bg.wasm.d.ts"
+  ],
+  "main": "wasm.js",
+  "types": "wasm.d.ts",
+  "sideEffects": false
+}

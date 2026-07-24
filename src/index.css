@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+/* IronCalc's UI is styled with "Inter"; without these faces it falls back to a
+   serif font. Fonts are bundled by Vite from src/fonts. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/inter-v13-latin-regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/inter-v13-latin-600.woff2") format("woff2");
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  overflow: hidden;
+}
+
+/* IronCalc's grid fills whatever box we give it. */
+.ironcalc-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}

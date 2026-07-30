@@ -3,7 +3,13 @@ import { IronCalc, init, Model } from "@ironcalc/workbook";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
-import { openFile, openPath, saveFile, saveFileAs } from "./fileApi";
+import {
+  exportFile,
+  openFile,
+  openPath,
+  saveFile,
+  saveFileAs,
+} from "./fileApi";
 
 const SUPPORTED = /\.(xlsx|ic)$/i;
 // Let Vite own the wasm asset URL (correct in both dev and production builds).
@@ -149,11 +155,28 @@ export default function App() {
     }
   }, [path, saveAs]);
 
+  const exportAs = useCallback(
+    async (format: "xlsx" | "csv") => {
+      const m = modelRef.current;
+      if (!m) return;
+      setBusy(true);
+      try {
+        const base = name.replace(/\.(xlsx|ic|csv)$/i, "");
+        await exportFile(m.toBytes(), format, m.getSelectedSheet(), base);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [name],
+  );
+
   // Dispatch native menu-bar actions (New / Open / Save / Save As). The menu
   // and its Cmd+N/O/S accelerators live in Rust; it emits a `menu` event here.
   // A ref keeps the latest handlers so we subscribe only once.
-  const actions = useRef({ newFile, open, save, saveAs });
-  actions.current = { newFile, open, save, saveAs };
+  const actions = useRef({ newFile, open, save, saveAs, exportAs });
+  actions.current = { newFile, open, save, saveAs, exportAs };
   useEffect(() => {
     const unlisten = listen<string>("menu", ({ payload }) => {
       const a = actions.current;
@@ -161,6 +184,8 @@ export default function App() {
       else if (payload === "open") a.open();
       else if (payload === "save") a.save();
       else if (payload === "save_as") a.saveAs();
+      else if (payload === "export_xlsx") a.exportAs("xlsx");
+      else if (payload === "export_csv") a.exportAs("csv");
     });
     return () => {
       unlisten.then((f) => f());

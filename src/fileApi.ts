@@ -41,6 +41,26 @@ export async function saveFile(path: string, bytes: Uint8Array): Promise<void> {
 }
 
 /**
+ * Exports the workbook to a new file WITHOUT changing the document being edited.
+ * `format` picks the target; `sheet` is the active sheet index (used for CSV,
+ * which is single-sheet). `defaultName` is the base name (no extension).
+ * Returns the chosen path, or null if cancelled.
+ */
+export async function exportFile(
+  bytes: Uint8Array,
+  format: "xlsx" | "csv",
+  sheet: number,
+  defaultName: string,
+): Promise<string | null> {
+  return invoke<string | null>("export_file", {
+    data: Array.from(bytes),
+    format,
+    sheet,
+    defaultName,
+  });
+}
+
+/**
  * Shows a save dialog (defaulting to `.xlsx`) and writes the workbook.
  * Returns the chosen path, or null if cancelled.
  */

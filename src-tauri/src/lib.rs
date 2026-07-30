@@ -93,6 +93,74 @@ async fn open_file(app: AppHandle) -> Result<Option<OpenedFile>, String> {
     }))
 }
 
+/// Renders one worksheet's used range as CSV (values as displayed).
+fn build_csv(model: &Model, sheet: u32) -> Result<String, String> {
+    let ws = model.workbook.worksheet(sheet)?;
+    let dim = ws.dimension();
+    let mut out = String::new();
+    if dim.max_row >= dim.min_row && dim.max_column >= dim.min_column {
+        for row in dim.min_row..=dim.max_row {
+            let mut cells = Vec::with_capacity((dim.max_column - dim.min_column + 1) as usize);
+            for col in dim.min_column..=dim.max_column {
+                let value = model
+                    .get_formatted_cell_value(sheet, row, col)
+                    .unwrap_or_default();
+                cells.push(csv_escape(&value));
+            }
+            out.push_str(&cells.join(","));
+            out.push_str("\r\n");
+        }
+    }
+    Ok(out)
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Exports the workbook to a chosen path/format WITHOUT changing the document
+/// currently being edited. `format` is "xlsx" or "csv"; `sheet` is only used for
+/// csv (single-sheet). Returns the written path, or None if cancelled.
+#[tauri::command]
+async fn export_file(
+    app: AppHandle,
+    data: Vec<u8>,
+    format: String,
+    sheet: u32,
+    default_name: String,
+) -> Result<Option<String>, String> {
+    let (ext, filter) = match format.as_str() {
+        "csv" => ("csv", "CSV"),
+        _ => ("xlsx", "Excel Workbook"),
+    };
+    let (tx, rx) = mpsc::channel();
+    app.dialog()
+        .file()
+        .set_file_name(format!("{default_name}.{ext}"))
+        .add_filter(filter, &[ext])
+        .save_file(move |f| {
+            let _ = tx.send(f);
+        });
+    let Some(fp) = rx.recv().map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let path = fp.as_path().ok_or("Invalid file path")?.to_path_buf();
+
+    let model = Model::from_bytes(&data, "en").map_err(|e| e.to_string())?;
+    if format == "csv" {
+        fs::write(&path, build_csv(&model, sheet)?).map_err(|e| e.to_string())?;
+    } else {
+        let cursor =
+            save_xlsx_to_writer(&model, Cursor::new(Vec::new())).map_err(|e| e.to_string())?;
+        fs::write(&path, cursor.into_inner()).map_err(|e| e.to_string())?;
+    }
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 async fn open_path(path: String) -> Result<OpenedFile, String> {
     let p = Path::new(&path);
@@ -176,6 +244,20 @@ mod tests {
         let _ = std::fs::remove_file(xlsx_out);
         let _ = std::fs::remove_file(ic_out);
     }
+
+    #[test]
+    fn csv_export_uses_display_values_and_escapes() {
+        let mut m = Model::new_empty("t", "en", "UTC", "en").unwrap();
+        m.set_user_input(0, 1, 1, "Name".into()).unwrap();
+        m.set_user_input(0, 1, 2, "a, b".into()).unwrap(); // needs quoting
+        m.set_user_input(0, 2, 1, "x\"y".into()).unwrap(); // needs escaped quote
+        m.set_user_input(0, 2, 2, "5".into()).unwrap();
+        m.set_user_input(0, 3, 2, "=B2+5".into()).unwrap(); // formula -> value
+        m.evaluate();
+
+        let csv = build_csv(&m, 0).unwrap();
+        assert_eq!(csv, "Name,\"a, b\"\r\n\"x\"\"y\",5\r\n,10\r\n");
+    }
 }
 
 /// Builds the native menu bar. File actions carry ids that are forwarded to the
@@ -193,6 +275,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let save_as = MenuItemBuilder::with_id("save_as", "Save As…")
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
+    let export_xlsx = MenuItemBuilder::with_id("export_xlsx", "Excel Workbook (.xlsx)").build(app)?;
+    let export_csv = MenuItemBuilder::with_id("export_csv", "CSV (.csv)").build(app)?;
+    let export_menu = SubmenuBuilder::new(app, "Export")
+        .item(&export_xlsx)
+        .item(&export_csv)
+        .build()?;
 
     // App menu (first on macOS) — keeps About/Hide/Quit that a custom menu replaces.
     let app_menu = SubmenuBuilder::new(app, "Sheets")
@@ -212,6 +300,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&save)
         .item(&save_as)
+        .separator()
+        .item(&export_menu)
         .separator()
         .close_window()
         .build()?;
@@ -239,7 +329,8 @@ pub fn run() {
             open_file,
             open_path,
             save_file,
-            save_file_as
+            save_file_as,
+            export_file
         ])
         .setup(|app| {
             let menu = build_menu(app.handle())?;
@@ -248,7 +339,10 @@ pub fn run() {
         })
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
-            if matches!(id, "new" | "open" | "save" | "save_as") {
+            if matches!(
+                id,
+                "new" | "open" | "save" | "save_as" | "export_xlsx" | "export_csv"
+            ) {
                 let _ = app.emit("menu", id.to_string());
             }
         })

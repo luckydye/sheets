@@ -9,6 +9,8 @@ A minimal, **offline** desktop table editor. It embeds the [IronCalc](https://gi
 - Open / edit / save `.xlsx` workbooks (and IronCalc's native `.ic` format).
 - Formulas, formatting, multiple sheets — the full IronCalc grid.
 - Native menu bar — **File ▸ New / Open… / Save / Save As…** with `⌘N / ⌘O / ⌘S / ⌘⇧S`.
+- **File ▸ Export ▸** Excel Workbook (`.xlsx`) or CSV (`.csv`, active sheet) — a copy, without changing the file you're editing.
+- Open files by dragging them onto the window.
 - Fully offline; nothing leaves your machine.
 
 ## How it works

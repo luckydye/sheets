@@ -14,30 +14,12 @@ order, with `git apply`) to the freshly cloned IronCalc source at tag
   render, the headers and hit-testing by it. Panes and outlines are clipped,
   which they had to be anyway once a row/column can be partially scrolled.
 
-- **`0002-scroll-performance.patch`** — makes scrolling cost the same anywhere in
-  the sheet. Applies on top of `0001`. Three things were linear in the distance
-  from A1, on *every* scroll event:
-  - Turning a pixel position into a cell (and back) added up every row/column
-    before it, one wasm call each — 214k calls per event around row 200_000.
-    Now it walks from an anchor ("column C starts at x") that the model seeds and
-    each scroll advances by a few pixels. Re-seeded on every render, and
-    explicitly on row/column resize (which doesn't re-render).
-  - Text from off-screen cells that spills into the viewport: finding where such
-    a cell *is* walked every column in between. Now the walk stops as soon as it
-    is further away than the text could stretch.
-  - `getScrollX`/`getScrollY` (the same sum, in Rust) were called per scroll
-    event; the anchor knows the answer.
-
-  Plus: one render per animation frame instead of one per scroll event, and cell
-  styles / the visible range are memoised per frame (each was fetched several
-  times while drawing one).
-
-- **`0003-text-wrapping-cost.patch`** — stops re-wrapping text on every frame.
-  Applies on top of `0002`. Wrapping a cell measures it word by word, so a cell
-  with a few thousand characters costs thousands of canvas text measurements —
-  and the grid redrew every visible cell on every scroll event. In a Chrome CPU
-  profile of a workbook whose cells hold up to 32k characters (`wrapText` on),
-  `measureText` alone was 30% of all time. Three changes:
+- **`0002-text-wrapping-cost.patch`** — stops re-wrapping text on every frame.
+  Wrapping a cell measures it word by word, so a cell with a few thousand
+  characters costs thousands of canvas text measurements — and the grid redrew
+  every visible cell on every scroll event. In a Chrome CPU profile of a workbook
+  whose cells hold up to 32k characters with `wrapText` on, `measureText` alone
+  was 30% of all time. Three changes:
   - The wrapped lines of a cell (and their widths) are cached and reused across
     scroll frames. Only a scroll may reuse them — every other render re-wraps,
     since it may follow an edit.
@@ -55,6 +37,15 @@ order, with `git apply`) to the freshly cloned IronCalc source at tag
   `lineBudget` in `computeCellText` (make it always `POSITIVE_INFINITY`) restores
   upstream's output exactly, at the cost of a stall whenever a text-heavy cell
   first scrolls into view.
+
+## Removed
+
+A third patch made scrolling cost the same anywhere in the sheet: converting a
+pixel position to a cell added up every row/column before it, one wasm call each,
+so a scroll event around row 200_000 made 214k of them. It worked (57ms → 8ms per
+frame that far out) but only mattered in the empty far reaches of the grid, so it
+was dropped as not worth the patch surface. It is in the history if the need comes
+back: `git show e8df78d -- patches/0002-scroll-performance.patch`.
 
 To rework a patch: clone `ironcalc` at the tag, `git apply` the patches up to the
 one you want, edit, then `git diff -- webapp/IronCalc/src > patches/<name>.patch`

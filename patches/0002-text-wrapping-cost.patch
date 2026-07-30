@@ -1,5 +1,5 @@
 diff --git a/webapp/IronCalc/src/components/WorksheetCanvas/util.ts b/webapp/IronCalc/src/components/WorksheetCanvas/util.ts
-index 56a5a8d..635be93 100644
+index 56a5a8d..8adad72 100644
 --- a/webapp/IronCalc/src/components/WorksheetCanvas/util.ts
 +++ b/webapp/IronCalc/src/components/WorksheetCanvas/util.ts
 @@ -15,6 +15,12 @@ export function hexToRGBA10Percent(colorHex: string): string {
@@ -33,7 +33,7 @@ index 56a5a8d..635be93 100644
  ): string[] {
    // Split the text into lines
    const rawLines = text.split("\n");
-@@ -44,8 +54,22 @@ export function computeWrappedLines(
+@@ -44,8 +54,26 @@ export function computeWrappedLines(
    }
    const wrappedLines = [];
    for (const line of rawLines) {
@@ -45,8 +45,12 @@ index 56a5a8d..635be93 100644
 +    // Only the start of the line is measured: measuring a very long string is
 +    // slow in itself, and if its first characters are already too wide for the
 +    // cell then so is the whole thing.
-+    const probe = line.length > PROBE_LENGTH ? line.slice(0, PROBE_LENGTH) : line;
-+    if (context.measureText(probe).width < width && probe.length === line.length) {
++    const probe =
++      line.length > PROBE_LENGTH ? line.slice(0, PROBE_LENGTH) : line;
++    if (
++      context.measureText(probe).width < width &&
++      probe.length === line.length
++    ) {
 +      wrappedLines.push(line);
 +      continue;
 +    }
@@ -56,7 +60,7 @@ index 56a5a8d..635be93 100644
      for (let i = 1; i < words.length; i += 1) {
        const word = words[i];
        const testLine = `${currentLine} ${word}`;
-@@ -54,10 +78,16 @@ export function computeWrappedLines(
+@@ -54,10 +82,16 @@ export function computeWrappedLines(
          currentLine = testLine;
        } else {
          wrappedLines.push(currentLine);
@@ -75,14 +79,18 @@ index 56a5a8d..635be93 100644
    return wrappedLines;
  }
 diff --git a/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts b/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts
-index 3126ffa..602fa75 100644
+index 4473eb0..978cce7 100644
 --- a/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts
 +++ b/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts
-@@ -164,6 +164,24 @@ export default class WorksheetCanvas {
+@@ -130,6 +130,29 @@ export default class WorksheetCanvas {
+    */
+   scrollOffset: ScrollOffset;
  
-   private visibleCells: { topLeftCell: Cell; bottomRightCell: Cell } | null;
- 
-+  /** See getCellLines. Keyed the same way as styleCache, but longer lived. */
++  /**
++   * The lines a cell's text breaks into, and how wide each one is. See
++   * getCellLines: wrapping is the most expensive thing a frame does, and
++   * scrolling redraws the same cells without their text changing.
++   */
 +  private cellLines: Map<
 +    number,
 +    {
@@ -96,34 +104,42 @@ index 3126ffa..602fa75 100644
 +
 +  /**
 +   * Set by setScrollPosition: the next render only moves the view, so the wrapped
-+   * text of each cell is still good. Any other render starts from scratch.
++   * text of each cell is still good. Any other render starts from scratch, since
++   * it may be following an edit.
 +   */
 +  private preserveCellLines: boolean;
 +
    constructor(options: CanvasSettings) {
      this.model = options.model;
      this.sheetWidth = 0;
-@@ -197,6 +215,8 @@ export default class WorksheetCanvas {
-     this.resetAnchor();
-     this.styleCache = new Map();
-     this.visibleCells = null;
+@@ -158,6 +181,8 @@ export default class WorksheetCanvas {
+     // a cell marked as "spill" means its left border should be skipped
+     this.spills = new Map<string, number>();
+     this.cells = [];
 +    this.cellLines = new Map();
 +    this.preserveCellLines = false;
    }
  
-   /**
-@@ -238,6 +258,54 @@ export default class WorksheetCanvas {
+   setScrollPosition(scrollPosition: { left: number; top: number }): void {
+@@ -168,6 +193,7 @@ export default class WorksheetCanvas {
+     //    3. (left, top) are the absolute coordinates of a cell
+     // Whatever is left over is kept as a sub-cell pixel offset, so that we can
+     // render partially scrolled rows/columns and scroll smoothly.
++    this.preserveCellLines = true;
+     const { column, left } = this.getBoundedColumn(scrollPosition.left);
+     const { row, top } = this.getBoundedRow(scrollPosition.top);
+     this.scrollOffset.x = Math.max(0, scrollPosition.left - left);
+@@ -569,6 +595,53 @@ export default class WorksheetCanvas {
      }
    }
  
 +  /**
-+   * The lines a cell's text breaks into, and how wide each one is.
++   * The lines a cell's text breaks into, with the width of each.
 +   *
-+   * Wrapping means measuring every word in the cell, so for text-heavy sheets
-+   * this is by far the most expensive part of a frame — and scrolling redraws the
-+   * same cells over and over without their text changing. Hence the cache, which
-+   * survives scroll frames (see `preserveCellLines`) and is thrown away by any
-+   * other render, since that may follow an edit.
++   * Wrapping measures every word of the text, so for a sheet with a lot of text
++   * in its cells this is by far the most expensive part of drawing a frame — and
++   * scrolling draws the same cells over and over, with the same text. Hence the
++   * cache; see `preserveCellLines` for when it is dropped.
 +   */
 +  private getCellLines(
 +    sheet: number,
@@ -155,7 +171,7 @@ index 3126ffa..602fa75 100644
 +      lineBudget,
 +    );
 +    const widths = lines.map((line) => context.measureText(line).width);
-+    // Long scrolls through a big sheet would otherwise grow this without end
++    // A long scroll through a big sheet would otherwise grow this without end
 +    if (this.cellLines.size > 4096) {
 +      this.cellLines.clear();
 +    }
@@ -164,50 +180,10 @@ index 3126ffa..602fa75 100644
 +    return entry;
 +  }
 +
-   /** this.model.getCellStyle, but at most once per cell per frame. */
-   private getCellStyle(sheet: number, row: number, column: number): CellStyle {
-     const key = row * (LAST_COLUMN + 1) + column;
-@@ -317,6 +385,7 @@ export default class WorksheetCanvas {
-   invalidateAnchor(): void {
-     this.anchor.sheet = -1;
-     this.invalidateFrame();
-+    this.cellLines.clear();
-   }
- 
-   setScrollPosition(scrollPosition: { left: number; top: number }): void {
-@@ -330,6 +399,7 @@ export default class WorksheetCanvas {
-     const { column, left } = this.getBoundedColumn(scrollPosition.left);
-     const { row, top } = this.getBoundedRow(scrollPosition.top);
-     this.invalidateFrame();
-+    this.preserveCellLines = true;
-     this.scrollOffset.x = Math.max(0, scrollPosition.left - left);
-     this.scrollOffset.y = Math.max(0, scrollPosition.top - top);
-     this.model.setTopLeftVisibleCell(row, column);
-@@ -673,12 +743,21 @@ export default class WorksheetCanvas {
-    * looking at at all.
-    */
-   private cellTextReach(sheet: number, row: number, column: number): number {
-+    const style = this.getCellStyle(sheet, row, column);
-+    // Wrapped text is broken up to fit the cell, so it never spills out of it
-+    if (style.alignment?.wrap_text) {
-+      return 0;
-+    }
-     const text = this.model.getFormattedCellValue(sheet, row, column);
-     if (text === "") {
-       return 0;
-     }
--    const { font } = this.getFontStyle(this.getCellStyle(sheet, row, column));
--    this.ctx.font = font;
-+    // Measuring a very long string is itself slow, and text that long stretches
-+    // further than any viewport anyway, so don't bother finding out how far.
-+    if (text.length > 500) {
-+      return Number.POSITIVE_INFINITY;
-+    }
-+    this.ctx.font = this.getFontStyle(style).font;
-     return this.ctx.measureText(text).width;
-   }
- 
-@@ -826,19 +905,24 @@ export default class WorksheetCanvas {
+   // Compute the text properties for a cell
+   private computeCellText(
+     row: number,
+@@ -599,19 +672,24 @@ export default class WorksheetCanvas {
      const context = this.ctx;
      context.font = font;
      context.fillStyle = textColor;
@@ -241,7 +217,7 @@ index 3126ffa..602fa75 100644
      );
      const lineCount = lines.length;
      let maxWidth = 0;
-@@ -860,7 +944,7 @@ export default class WorksheetCanvas {
+@@ -633,7 +711,7 @@ export default class WorksheetCanvas {
      };
  
      lines.forEach((text, line) => {
@@ -250,10 +226,10 @@ index 3126ffa..602fa75 100644
        let textX: number;
        let textY: number;
        // The idea is that in the present font-size and default row heigh,
-@@ -2147,6 +2231,10 @@ export default class WorksheetCanvas {
+@@ -1915,6 +1993,10 @@ export default class WorksheetCanvas {
+   }
  
    renderSheet(): void {
-     this.invalidateFrame();
 +    if (!this.preserveCellLines) {
 +      this.cellLines.clear();
 +    }

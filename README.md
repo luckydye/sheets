@@ -27,7 +27,7 @@ IronCalc's `.ic` format is `bitcode`-serialized and is only compatible between a
 - `vendor/ironcalc-wasm/` — `@ironcalc/wasm`, `wasm-pack --target web`
 - `vendor/ironcalc-workbook/` — `@ironcalc/workbook`, the React UI (`vite build`)
 
-The UI is built with the local patches in `patches/` applied on top of the tag: the grid scrolls smoothly by the pixel instead of jumping a whole row/column, at the same speed no matter how far from A1 you are, and without re-wrapping every visible cell's text on every frame. See `patches/README.md`.
+The UI is built with the local patches in `patches/` applied on top of the tag: the grid scrolls smoothly by the pixel instead of jumping a whole row/column, and it no longer re-wraps every visible cell's text on every frame. See `patches/README.md`.
 
 To rebuild them (e.g. to bump the pinned version), run `task vendor` (see `scripts/build-ironcalc.sh`) then `bun install` to refresh the copies under `node_modules`.
 

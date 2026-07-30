@@ -1,5 +1,7 @@
 # Sheets
 
+<img width="1936" height="1118" alt="image" src="https://github.com/user-attachments/assets/c68f37c2-988a-4b81-856f-54448a9fba7c" />
+
 A minimal, **offline** desktop table editor. It embeds the [IronCalc](https://github.com/ironcalc/ironcalc) spreadsheet UI (WebAssembly engine + React grid) inside a [Tauri](https://tauri.app) shell, and reads/writes real `.xlsx` files. Single file at a time — no accounts, no cloud, no sharing.
 
 ## Features

@@ -19,7 +19,21 @@ tasks:
   build:
     desc: "Build a native app bundle"
     deps: [setup]
-    cmd: bun run tauri build
+    cmds:
+      - bun run tauri build
+      - '{{if eq OS "darwin"}}./scripts/sign-macos.sh{{else}}true{{end}}'
+
+  sign:
+    desc: "Re-sign the built macOS bundle and refresh its file associations"
+    cmd: ./scripts/sign-macos.sh
+
+  install:
+    desc: "Build and install Sheets.app into /Applications"
+    deps: [build]
+    cmds:
+      - rm -rf /Applications/Sheets.app
+      - cp -R src-tauri/target/release/bundle/macos/Sheets.app /Applications/
+      - ./scripts/sign-macos.sh /Applications/Sheets.app
 
   web:
     desc: "Run just the Vite frontend in a browser (no native shell)"

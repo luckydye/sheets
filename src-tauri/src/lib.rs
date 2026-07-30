@@ -7,16 +7,28 @@
 
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
-use std::sync::mpsc;
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Mutex};
 
 use ironcalc::base::Model;
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
 use serde::Serialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
+
+/// Files handed to us by the OS (Finder double-click, "Open With", `open -a`)
+/// before the webview was ready to receive them.
+#[derive(Default)]
+struct Pending {
+    queue: Vec<String>,
+    /// Set once the frontend has attached its `open-path` listener.
+    ready: bool,
+}
+
+#[derive(Default)]
+struct PendingOpen(Mutex<Pending>);
 
 #[derive(Serialize)]
 struct OpenedFile {
@@ -172,6 +184,33 @@ async fn open_path(path: String) -> Result<OpenedFile, String> {
     })
 }
 
+/// Drains files the OS asked us to open before the frontend was listening, and
+/// marks the frontend ready so later opens are delivered live via `open-path`.
+/// The frontend must subscribe *before* calling this, so nothing falls between.
+#[tauri::command]
+fn take_pending_open(app: AppHandle) -> Vec<String> {
+    let state = app.state::<PendingOpen>();
+    let mut pending = state.0.lock().unwrap();
+    pending.ready = true;
+    std::mem::take(&mut pending.queue)
+}
+
+/// Routes an OS "open document" request (Finder double-click, "Open With",
+/// `open -a Sheets file.xlsx`) to the webview. On a cold launch macOS delivers
+/// this before the webview exists, so it is buffered until the frontend asks.
+fn dispatch_open(app: &AppHandle, paths: Vec<PathBuf>) {
+    let state = app.state::<PendingOpen>();
+    let mut pending = state.0.lock().unwrap();
+    for path in paths {
+        let path = path.to_string_lossy().into_owned();
+        if pending.ready {
+            let _ = app.emit("open-path", path);
+        } else {
+            pending.queue.push(path);
+        }
+    }
+}
+
 #[tauri::command]
 async fn save_file(path: String, data: Vec<u8>) -> Result<(), String> {
     write_ic(Path::new(&path), &data)
@@ -323,14 +362,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(PendingOpen::default())
         .invoke_handler(tauri::generate_handler![
             open_file,
             open_path,
             save_file,
             save_file_as,
-            export_file
+            export_file,
+            take_pending_open
         ])
         .setup(|app| {
             let menu = build_menu(app.handle())?;
@@ -346,6 +387,20 @@ pub fn run() {
                 let _ = app.emit("menu", id.to_string());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        // macOS hands documents to a running app via the app delegate rather
+        // than argv; Tauri surfaces that as `Opened`.
+        if let tauri::RunEvent::Opened { urls } = event {
+            let paths = urls
+                .iter()
+                .filter_map(|u| u.to_file_path().ok())
+                .collect::<Vec<_>>();
+            if !paths.is_empty() {
+                dispatch_open(app, paths);
+            }
+        }
+    });
 }

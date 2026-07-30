@@ -10,7 +10,7 @@ A minimal, **offline** desktop table editor. It embeds the [IronCalc](https://gi
 - Formulas, formatting, multiple sheets — the full IronCalc grid.
 - Native menu bar — **File ▸ New / Open… / Save / Save As…** with `⌘N / ⌘O / ⌘S / ⌘⇧S`.
 - **File ▸ Export ▸** Excel Workbook (`.xlsx`) or CSV (`.csv`, active sheet) — a copy, without changing the file you're editing.
-- Open files by dragging them onto the window.
+- Open files by dragging them onto the window, or by double-clicking an `.xlsx` / `.ic` in Finder (see [Install on macOS](#install-on-macos)).
 - Fully offline; nothing leaves your machine.
 
 ## How it works
@@ -52,6 +52,43 @@ task build      # or: bun run tauri build  -> native bundle in src-tauri/target/
 ```
 
 `task web` runs just the Vite frontend in a browser, but file open/save need the Tauri shell.
+
+## Install on macOS
+
+```sh
+task install    # build, copy to /Applications, sign, register file associations
+```
+
+Sheets then appears under **Open With** for `.xlsx` and `.ic`, and double-clicking
+one opens it (`Get Info ▸ Open with ▸ Change All…` to make it the default).
+
+### Why signing matters here
+
+`tauri build` leaves the bundle *linker-signed* only — `codesign -dvvv` reports
+`Info.plist=not bound` and `Sealed Resources=none`. Gatekeeper can't assess a
+bundle in that state, so handing it a **quarantined** document (any `.xlsx` that
+arrived via a browser, Mail or Slack) fails with:
+
+> Apple could not verify "…​.xlsx" is free of malware that may harm your Mac.
+
+`scripts/sign-macos.sh` re-signs the whole bundle, which binds `Info.plist` and
+seals resources. `task build` and `task install` run it automatically; `task sign`
+re-runs it on its own.
+
+Without `APPLE_SIGNING_IDENTITY` the signature is **ad-hoc**: valid on the Mac
+that built it, which is all a local install needs. Note that in this case the
+`.dmg` is assembled *before* the re-signing step, so it still contains the
+unsigned app — it's for local use, not distribution.
+
+To ship to other Macs, export a Developer ID Application certificate and set
+
+```sh
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+```
+
+before `task build`. Tauri then signs the app itself, before the `.dmg` is built.
+Distribution also requires notarizing the result (`xcrun notarytool submit`) and
+stapling the ticket.
 
 ## License
 

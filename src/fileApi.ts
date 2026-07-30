@@ -33,6 +33,15 @@ export async function openPath(path: string): Promise<OpenResult> {
 }
 
 /**
+ * Drains files the OS asked the app to open before the webview was listening
+ * (a Finder double-click that cold-launches Sheets). Call this *after*
+ * subscribing to the `open-path` event so no request is missed.
+ */
+export async function takePendingOpen(): Promise<string[]> {
+  return invoke<string[]>("take_pending_open");
+}
+
+/**
  * Writes `.ic` bytes (from `model.toBytes()`) to an existing path.
  * The Rust side converts to `.xlsx` when the path ends in `.xlsx`.
  */

@@ -9,6 +9,7 @@ import {
   openPath,
   saveFile,
   saveFileAs,
+  takePendingOpen,
 } from "./fileApi";
 
 const SUPPORTED = /\.(xlsx|ic)$/i;
@@ -29,6 +30,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // The wasm engine must be up before any Model.from_bytes call — including one
+  // triggered by the OS handing us a file at launch.
+  const [engineReady, setEngineReady] = useState(false);
 
   const modelRef = useRef<Model | null>(null);
   modelRef.current = model;
@@ -53,6 +57,7 @@ export default function App() {
         await init(wasmUrl);
         if (cancelled) return;
         install(new Model("Untitled", "en", "UTC", "en"), null, DEFAULT_NAME);
+        setEngineReady(true);
       } catch (e) {
         if (!cancelled) setError(`Engine failed to load: ${String(e)}`);
       }
@@ -103,10 +108,12 @@ export default function App() {
     }
   }, [install]);
 
-  const openDroppedPath = useCallback(
+  // Opens a workbook from a path supplied by the OS: a window drop, or a Finder
+  // double-click / "Open With" routed through the `open-path` event.
+  const openFromPath = useCallback(
     async (filePath: string) => {
       if (!SUPPORTED.test(filePath)) {
-        setError("Unsupported file — drop a .xlsx or .ic file.");
+        setError("Unsupported file — Sheets opens .xlsx and .ic files.");
         return;
       }
       setBusy(true);
@@ -194,8 +201,8 @@ export default function App() {
 
   // Open workbooks dropped onto the window. Tauri intercepts OS file drops and
   // emits tauri://drag-drop with real filesystem paths.
-  const dropHandler = useRef(openDroppedPath);
-  dropHandler.current = openDroppedPath;
+  const pathHandler = useRef(openFromPath);
+  pathHandler.current = openFromPath;
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
       const p = event.payload;
@@ -206,13 +213,39 @@ export default function App() {
       } else if (p.type === "drop") {
         setDragging(false);
         const first = p.paths?.[0];
-        if (first) dropHandler.current(first);
+        if (first) pathHandler.current(first);
       }
     });
     return () => {
       unlisten.then((f) => f());
     };
   }, []);
+
+  // Open workbooks handed over by macOS (double-click in Finder, "Open With",
+  // `open -a Sheets file.xlsx`). Subscribe first, then drain anything the OS
+  // queued while the app was still booting, so a cold launch isn't dropped.
+  useEffect(() => {
+    if (!engineReady) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      unlisten = await listen<string>("open-path", ({ payload }) => {
+        pathHandler.current(payload);
+      });
+      if (cancelled) {
+        unlisten();
+        return;
+      }
+      const pending = await takePendingOpen();
+      // Only the last one wins — Sheets is single-window/single-document.
+      const last = pending.at(-1);
+      if (last) pathHandler.current(last);
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [engineReady]);
 
   if (!model) {
     return (

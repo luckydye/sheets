@@ -1,0 +1,606 @@
+diff --git a/webapp/IronCalc/src/components/Worksheet/Worksheet.tsx b/webapp/IronCalc/src/components/Worksheet/Worksheet.tsx
+index ab67488..e361112 100644
+--- a/webapp/IronCalc/src/components/Worksheet/Worksheet.tsx
++++ b/webapp/IronCalc/src/components/Worksheet/Worksheet.tsx
+@@ -78,6 +78,19 @@ const Worksheet = forwardRef(
+     } | null>(null);
+ 
+     const ignoreScrollEventRef = useRef(false);
++    // The model only remembers the top-left visible cell; the remaining sub-cell
++    // pixels live here, so that scrolling is smooth instead of snapping to whole
++    // rows/columns. Owned here because the canvas is recreated on every render.
++    // `sheet`, `scrollX` and `scrollY` record what the model said last time, to
++    // detect scrolling that did not come from this element (keyboard navigation,
++    // switching sheet, ...) and drop the offset then.
++    const scrollOffsetRef = useRef({
++      x: 0,
++      y: 0,
++      sheet: -1,
++      scrollX: -1,
++      scrollY: -1,
++    });
+ 
+     const { model, workbookState, refresh } = props;
+     const [clientWidth, clientHeight] = useWindowSize();
+@@ -167,6 +180,7 @@ const Worksheet = forwardRef(
+           worksheetCanvas.current?.renderSheet();
+         },
+         refresh,
++        scrollOffset: scrollOffsetRef.current,
+       });
+       const scrollX = model.getScrollX();
+       const scrollY = model.getScrollY();
+@@ -175,19 +189,35 @@ const Worksheet = forwardRef(
+         spacerElement.current.style.height = `${sheetHeight}px`;
+         spacerElement.current.style.width = `${sheetWidth}px`;
+       }
++      // If the top-left cell moved for a reason other than this element being
++      // scrolled, the sub-cell offset is stale: drop it.
++      const offset = scrollOffsetRef.current;
++      const sheet = model.getSelectedSheet();
++      if (sheet !== offset.sheet || scrollX !== offset.scrollX) {
++        offset.x = 0;
++      }
++      if (sheet !== offset.sheet || scrollY !== offset.scrollY) {
++        offset.y = 0;
++      }
++      offset.sheet = sheet;
++      offset.scrollX = scrollX;
++      offset.scrollY = scrollY;
++
+       const left = scrollElement.current.scrollLeft;
+       const top = scrollElement.current.scrollTop;
+-      if (scrollX !== left) {
++      // Anything below a pixel is left alone: assigning scrollLeft/scrollTop in
++      // the middle of a smooth (momentum) scroll would fight the browser.
++      if (Math.abs(scrollX + offset.x - left) >= 1) {
+         ignoreScrollEventRef.current = true;
+-        scrollElement.current.scrollLeft = scrollX;
++        scrollElement.current.scrollLeft = scrollX + offset.x;
+         setTimeout(() => {
+           ignoreScrollEventRef.current = false;
+         }, 0);
+       }
+ 
+-      if (scrollY !== top) {
++      if (Math.abs(scrollY + offset.y - top) >= 1) {
+         ignoreScrollEventRef.current = true;
+-        scrollElement.current.scrollTop = scrollY;
++        scrollElement.current.scrollTop = scrollY + offset.y;
+         setTimeout(() => {
+           ignoreScrollEventRef.current = false;
+         }, 0);
+@@ -281,6 +311,12 @@ const Worksheet = forwardRef(
+       const top = scrollElement.current.scrollTop;
+ 
+       worksheetCanvas.current.setScrollPosition({ left, top });
++      // Remember where the model ended up, so that the next render can tell this
++      // scroll apart from one it did not know about (see the effect above).
++      const offset = scrollOffsetRef.current;
++      offset.sheet = model.getSelectedSheet();
++      offset.scrollX = model.getScrollX();
++      offset.scrollY = model.getScrollY();
+       worksheetCanvas.current.renderSheet();
+     };
+ 
+diff --git a/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts b/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts
+index fe4c6f7..4473eb0 100644
+--- a/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts
++++ b/webapp/IronCalc/src/components/WorksheetCanvas/worksheetCanvas.ts
+@@ -41,6 +41,16 @@ export interface CanvasSettings {
+   onColumnWidthChanges: (sheet: number, column: number, width: number) => void;
+   onRowHeightChanges: (sheet: number, row: number, height: number) => void;
+   refresh: () => void;
++  /**
++   * Sub-cell scroll offset, in pixels. See WorksheetCanvas.scrollOffset.
++   * It is owned by the caller so that it survives the canvas being recreated.
++   */
++  scrollOffset?: ScrollOffset;
++}
++
++export interface ScrollOffset {
++  x: number;
++  y: number;
+ }
+ 
+ export const fonts = {
+@@ -112,6 +122,14 @@ export default class WorksheetCanvas {
+   cells: TextProperties[];
+   spills: Map<string, number>;
+ 
++  /**
++   * How many pixels of the top-left visible cell are scrolled out of the grid
++   * (to the left of / above it). The model only remembers the top-left *cell*,
++   * so this is what makes scrolling smooth instead of jumping a whole row or
++   * column at a time. It is always smaller than that cell's width/height.
++   */
++  scrollOffset: ScrollOffset;
++
+   constructor(options: CanvasSettings) {
+     this.model = options.model;
+     this.sheetWidth = 0;
+@@ -123,6 +141,7 @@ export default class WorksheetCanvas {
+     this.workbookState = options.workbookState;
+     this.editor = options.elements.editor;
+     this.refresh = options.refresh;
++    this.scrollOffset = options.scrollOffset ?? { x: 0, y: 0 };
+ 
+     this.cellOutline = options.elements.cellOutline;
+     this.areaOutline = options.elements.areaOutline;
+@@ -142,13 +161,17 @@ export default class WorksheetCanvas {
+   }
+ 
+   setScrollPosition(scrollPosition: { left: number; top: number }): void {
+-    // We ony scroll whole rows and whole columns
++    // The model only stores the top-left visible *cell*.
+     // left, top are maximized with constraints:
+     //    1. left <= scrollPosition.left
+     //    2. top <= scrollPosition.top
+     //    3. (left, top) are the absolute coordinates of a cell
+-    const { column } = this.getBoundedColumn(scrollPosition.left);
+-    const { row } = this.getBoundedRow(scrollPosition.top);
++    // Whatever is left over is kept as a sub-cell pixel offset, so that we can
++    // render partially scrolled rows/columns and scroll smoothly.
++    const { column, left } = this.getBoundedColumn(scrollPosition.left);
++    const { row, top } = this.getBoundedRow(scrollPosition.top);
++    this.scrollOffset.x = Math.max(0, scrollPosition.left - left);
++    this.scrollOffset.y = Math.max(0, scrollPosition.top - top);
+     this.model.setTopLeftVisibleCell(row, column);
+   }
+ 
+@@ -245,7 +268,9 @@ export default class WorksheetCanvas {
+     let columnRight = columnLeft;
+     const frozenColumnsWidth = this.getFrozenColumnsWidth();
+     const frozenRowsHeight = this.getFrozenRowsHeight();
+-    let y = headerRowHeight + frozenRowsHeight;
++    // The top-left cell can be partially scrolled out, in which case one extra
++    // row/column becomes (partially) visible at the bottom/right.
++    let y = headerRowHeight + frozenRowsHeight - this.scrollOffset.y;
+     for (let row = rowTop; row <= LAST_ROW; row += 1) {
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+       if (y >= this.height - rowHeight || row === LAST_ROW) {
+@@ -255,7 +280,7 @@ export default class WorksheetCanvas {
+       y += rowHeight;
+     }
+ 
+-    let x = headerColumnWidth + frozenColumnsWidth;
++    let x = headerColumnWidth + frozenColumnsWidth - this.scrollOffset.x;
+     for (let column = columnLeft; column <= LAST_COLUMN; column += 1) {
+       const columnWidth = this.getColumnWidth(selectedSheet, column);
+       if (x >= this.width - columnWidth || column === LAST_COLUMN) {
+@@ -481,10 +506,13 @@ export default class WorksheetCanvas {
+ 
+     const frozenX = x;
+     const frozenY = y;
++    // Non-frozen rows and columns are shifted by the sub-cell scroll offset
++    const scrolledX = frozenX - this.scrollOffset.x;
++    const scrolledY = frozenY - this.scrollOffset.y;
+     // Top-right pane
+     y = headerRowHeight + 0.5;
+     for (let row = 1; row <= frozenRows; row += 1) {
+-      x = frozenX;
++      x = scrolledX;
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+       for (
+         let { column } = topLeftCell;
+@@ -500,7 +528,7 @@ export default class WorksheetCanvas {
+     }
+ 
+     // Bottom-left pane
+-    y = frozenY;
++    y = scrolledY;
+     for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+       x = headerColumnWidth;
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+@@ -522,9 +550,9 @@ export default class WorksheetCanvas {
+     }
+ 
+     // Bottom-right pane
+-    y = frozenY;
++    y = scrolledY;
+     for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+-      x = frozenX;
++      x = scrolledX;
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+ 
+       for (
+@@ -833,6 +861,8 @@ export default class WorksheetCanvas {
+   /// Renders the text in the cell.
+   private renderCellText(textProperties: TextProperties) {
+     const {
++      row,
++      column,
+       x,
+       y,
+       width,
+@@ -848,10 +878,37 @@ export default class WorksheetCanvas {
+ 
+     context.font = font;
+     context.fillStyle = textColor;
+-    // Create a rectangular clipping region
++    // Create a rectangular clipping region: the cell (plus whatever it spills
++    // into), intersected with the pane it belongs to. The pane clip matters
++    // because with a sub-cell scroll offset a cell can be partially scrolled
++    // under the headers or under the frozen rows/columns.
++    const selectedSheet = this.model.getSelectedSheet();
++    const frozenRows = this.model.getFrozenRowsCount(selectedSheet);
++    const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
++    const frozenRowsHeight = this.getFrozenRowsHeight();
++    const frozenColumnsWidth = this.getFrozenColumnsWidth();
++    const paneLeft =
++      column <= frozenColumns
++        ? headerColumnWidth
++        : headerColumnWidth + frozenColumnsWidth;
++    const paneTop =
++      row <= frozenRows ? headerRowHeight : headerRowHeight + frozenRowsHeight;
++    const paneRight =
++      column <= frozenColumns
++        ? headerColumnWidth + frozenColumnsWidth
++        : this.width;
++    const paneBottom =
++      row <= frozenRows ? headerRowHeight + frozenRowsHeight : this.height;
++    const clipX = Math.max(x, paneLeft);
++    const clipY = Math.max(y, paneTop);
+     context.save();
+     context.beginPath();
+-    context.rect(x, y, width, height);
++    context.rect(
++      clipX,
++      clipY,
++      Math.min(x + width, paneRight) - clipX,
++      Math.min(y + height, paneBottom) - clipY,
++    );
+     context.clip();
+ 
+     lines.forEach((line, _) => {
+@@ -1089,9 +1146,22 @@ export default class WorksheetCanvas {
+     }
+     const isFullRowSelected = columnStart === 1 && columnEnd === LAST_COLUMN;
+     const context = this.ctx;
++    const frozenRowsHeight = this.getFrozenRowsHeight();
+ 
+     let topLeftCornerY = headerRowHeight + 0.5;
+     const firstRow = frozenRows === 0 ? topLeftCell.row : 1;
++    // The scrollable headers are shifted up by the sub-cell scroll offset, so
++    // they are clipped to keep a partially scrolled header out of the frozen
++    // headers and out of the top-left corner.
++    let clipped = false;
++    if (frozenRows === 0) {
++      topLeftCornerY -= this.scrollOffset.y;
++      context.save();
++      context.beginPath();
++      context.rect(0, headerRowHeight, headerColumnWidth + 1, this.height);
++      context.clip();
++      clipped = true;
++    }
+ 
+     for (let row = firstRow; row <= bottomRightCell.row; row += 1) {
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+@@ -1126,12 +1196,27 @@ export default class WorksheetCanvas {
+         headerColumnWidth,
+       );
+       topLeftCornerY += rowHeight;
+-      this.addRowResizeHandle(topLeftCornerY, row, rowHeight);
++      if (topLeftCornerY > headerRowHeight + frozenRowsHeight) {
++        this.addRowResizeHandle(topLeftCornerY, row, rowHeight);
++      }
+       if (row === frozenRows) {
+-        topLeftCornerY += frozenSeparatorWidth;
++        topLeftCornerY += frozenSeparatorWidth - this.scrollOffset.y;
+         row = topLeftCell.row - 1;
++        context.save();
++        context.beginPath();
++        context.rect(
++          0,
++          headerRowHeight + frozenRowsHeight,
++          headerColumnWidth + 1,
++          this.height,
++        );
++        context.clip();
++        clipped = true;
+       }
+     }
++    if (clipped) {
++      context.restore();
++    }
+   }
+ 
+   private renderColumnHeaders(
+@@ -1169,7 +1254,30 @@ export default class WorksheetCanvas {
+     columnHeaders.style.lineHeight = `${headerRowHeight}px`;
+     columnHeaders.style.left = `${headerColumnWidth}px`;
+ 
++    const frozenColumnsWidth = this.getFrozenColumnsWidth();
++
++    // The scrollable headers are shifted left by the sub-cell scroll offset.
++    // They are added to the DOM _before_ the frozen ones — the flex `order`
++    // property puts them back in the right place, while the DOM order makes the
++    // frozen headers paint on top of a partially scrolled one.
++    // The container has `overflow: hidden`, which clips at the row headers.
++    deltaX = frozenColumnsWidth - this.scrollOffset.x;
++    for (let column = firstColumn; column <= lastColumn; column += 1) {
++      const selected = column >= columnStart && column <= columnEnd;
++      deltaX += this.addColumnHeader(
++        deltaX,
++        column,
++        selected,
++        isFullColumnSelected,
++        2,
++        column === firstColumn ? -this.scrollOffset.x : 0,
++        frozenColumnsWidth,
++      );
++    }
++    const width = deltaX;
++
+     // Frozen headers
++    deltaX = 0;
+     for (let column = 1; column <= frozenColumns; column += 1) {
+       const selected = column >= columnStart && column <= columnEnd;
+       deltaX += this.addColumnHeader(
+@@ -1177,6 +1285,7 @@ export default class WorksheetCanvas {
+         column,
+         selected,
+         isFullColumnSelected,
++        1,
+       );
+     }
+ 
+@@ -1187,21 +1296,11 @@ export default class WorksheetCanvas {
+       div.style.height = `${headerRowHeight}`;
+       div.style.display = "inline-block";
+       div.style.backgroundColor = gridSeparatorColor;
++      div.style.order = "1";
+       this.columnHeaders.insertBefore(div, null);
+-      deltaX += frozenSeparatorWidth;
+     }
+ 
+-    for (let column = firstColumn; column <= lastColumn; column += 1) {
+-      const selected = column >= columnStart && column <= columnEnd;
+-      deltaX += this.addColumnHeader(
+-        deltaX,
+-        column,
+-        selected,
+-        isFullColumnSelected,
+-      );
+-    }
+-
+-    columnHeaders.style.width = `${deltaX}px`;
++    columnHeaders.style.width = `${Math.max(width, frozenColumnsWidth)}px`;
+   }
+ 
+   private addColumnHeader(
+@@ -1209,6 +1308,9 @@ export default class WorksheetCanvas {
+     column: number,
+     selected: boolean,
+     isFullColumnSelected: boolean,
++    order: number,
++    marginLeft = 0,
++    minHandleX = 0,
+   ): number {
+     const columnWidth = this.getColumnWidth(
+       this.model.getSelectedSheet(),
+@@ -1217,10 +1319,18 @@ export default class WorksheetCanvas {
+     const div = document.createElement("div");
+     div.className = "column-header";
+     div.textContent = columnNameFromNumber(column);
++    div.style.order = `${order}`;
++    if (marginLeft) {
++      div.style.marginLeft = `${marginLeft}px`;
++    }
+     this.columnHeaders.insertBefore(div, null);
+ 
+     this.styleColumnHeader(columnWidth, div, selected, isFullColumnSelected);
+-    this.addColumnResizeHandle(deltaX + columnWidth, column, columnWidth);
++    // A handle of a column that is scrolled out of view would sit on top of the
++    // row headers or of the frozen columns, so it is skipped.
++    if (deltaX + columnWidth > minHandleX) {
++      this.addColumnResizeHandle(deltaX + columnWidth, column, columnWidth);
++    }
+     return columnWidth;
+   }
+ 
+@@ -1258,9 +1368,8 @@ export default class WorksheetCanvas {
+     includeFrozenRows: boolean,
+     includeFrozenColumns: boolean,
+   ): string {
+-    if (!includeFrozenRows && !includeFrozenColumns) {
+-      return "";
+-    }
++    // NB: this used to bail out when there were no frozen rows/columns, but with
++    // a sub-cell scroll offset any outline can stick out into the headers.
+     const frozenColumnsWidth = includeFrozenColumns
+       ? this.getFrozenColumnsWidth()
+       : 0;
+@@ -1348,13 +1457,13 @@ export default class WorksheetCanvas {
+       }
+     } else if (row >= topLeftCell.row) {
+       // row is bellow the frozen rows
+-      y = headerRowHeight + frozenRowsHeight;
++      y = headerRowHeight + frozenRowsHeight - this.scrollOffset.y;
+       for (let r = topLeftCell.row; r < row; r += 1) {
+         y += this.getRowHeight(selectedSheet, r);
+       }
+     } else {
+       // row is _above_ the frozen rows
+-      y = headerRowHeight + frozenRowsHeight;
++      y = headerRowHeight + frozenRowsHeight - this.scrollOffset.y;
+       for (let r = topLeftCell.row; r > row; r -= 1) {
+         y -= this.getRowHeight(selectedSheet, r - 1);
+       }
+@@ -1367,13 +1476,13 @@ export default class WorksheetCanvas {
+       }
+     } else if (column >= topLeftCell.column) {
+       // column is to the right of the frozen columns
+-      x = headerColumnWidth + frozenColumnsWidth;
++      x = headerColumnWidth + frozenColumnsWidth - this.scrollOffset.x;
+       for (let c = topLeftCell.column; c < column; c += 1) {
+         x += this.getColumnWidth(selectedSheet, c);
+       }
+     } else {
+       // column is to the left of the frozen columns
+-      x = headerColumnWidth + frozenColumnsWidth;
++      x = headerColumnWidth + frozenColumnsWidth - this.scrollOffset.x;
+       for (let c = topLeftCell.column; c > column; c -= 1) {
+         x -= this.getColumnWidth(selectedSheet, c - 1);
+       }
+@@ -1423,7 +1532,7 @@ export default class WorksheetCanvas {
+         }
+       }
+     } else {
+-      cellX = headerColumnWidth + frozenColumnsWidth;
++      cellX = headerColumnWidth + frozenColumnsWidth - this.scrollOffset.x;
+       column = topLeftCell.column - 1;
+       while (cellX <= x) {
+         column += 1;
+@@ -1456,7 +1565,7 @@ export default class WorksheetCanvas {
+         }
+       }
+     } else {
+-      cellY = headerRowHeight + frozenRowsHeight;
++      cellY = headerRowHeight + frozenRowsHeight - this.scrollOffset.y;
+       row = topLeftCell.row - 1;
+       while (cellY <= y) {
+         row += 1;
+@@ -1599,6 +1708,16 @@ export default class WorksheetCanvas {
+     cellOutline.style.height = `${height + 1}px`;
+ 
+     cellOutline.style.background = "none";
++    // Clip the part of the outline that is scrolled under the headers (or under
++    // the frozen rows/columns, if the selected cell is not itself frozen).
++    cellOutline.style.clip = this.getClipCSS(
++      x - padding - 2,
++      y - padding - 2,
++      width + 1,
++      height + 1,
++      selectedRow > frozenRows,
++      selectedColumn > frozenColumns,
++    );
+ 
+     // border is 2px so line-height must be height - 4
+     cellOutline.style.lineHeight = `${height - 4}px`;
+@@ -1640,9 +1759,8 @@ export default class WorksheetCanvas {
+       areaOutline.style.top = `${areaY - padding - 1}px`;
+       areaOutline.style.width = `${areaWidth + 2 * padding + 1 + borderCompensation}px`;
+       areaOutline.style.height = `${areaHeight + 2 * padding + 1 + borderCompensation}px`;
+-      const clipLeft = rowStart < topLeftCell.row && rowStart > frozenRows;
+-      const clipTop =
+-        columnStart < topLeftCell.column && columnStart > frozenColumns;
++      const clipLeft = rowStart > frozenRows;
++      const clipTop = columnStart > frozenColumns;
+       areaOutline.style.clip = this.getClipCSS(
+         areaX,
+         areaY,
+@@ -1699,6 +1817,8 @@ export default class WorksheetCanvas {
+       return;
+     }
+     const ctx = this.ctx;
++    ctx.save();
++    this.clipToGrid();
+     ctx.setLineDash([2, 2]);
+ 
+     const [xStart, yStart] = this.getCoordinatesByCell(
+@@ -1714,11 +1834,27 @@ export default class WorksheetCanvas {
+     ctx.strokeRect(xStart, yStart, xEnd - xStart, yEnd - yStart);
+ 
+     ctx.setLineDash([]);
++    ctx.restore();
++  }
++
++  /** Clips the context to the cells area, i.e. everything but the headers. */
++  private clipToGrid(): void {
++    const ctx = this.ctx;
++    ctx.beginPath();
++    ctx.rect(
++      headerColumnWidth,
++      headerRowHeight,
++      this.width - headerColumnWidth,
++      this.height - headerRowHeight,
++    );
++    ctx.clip();
+   }
+ 
+   private drawActiveRanges(topLeftCell: Cell, bottomRightCell: Cell): void {
+     let activeRanges = this.workbookState.getActiveRanges();
+     const ctx = this.ctx;
++    ctx.save();
++    this.clipToGrid();
+     ctx.setLineDash([2, 2]);
+     const referencedRange =
+       this.workbookState.getEditingCell()?.referencedRange || null;
+@@ -1775,6 +1911,7 @@ export default class WorksheetCanvas {
+     }
+ 
+     ctx.setLineDash([]);
++    ctx.restore();
+   }
+ 
+   renderSheet(): void {
+@@ -1843,10 +1980,19 @@ export default class WorksheetCanvas {
+ 
+     const frozenX = x;
+     const frozenY = y;
++    // Non-frozen rows and columns are shifted by the sub-cell scroll offset.
++    // Because of that they can bleed into the frozen panes, so each pane is
++    // clipped to its own rectangle.
++    const scrolledX = frozenX - this.scrollOffset.x;
++    const scrolledY = frozenY - this.scrollOffset.y;
+     // Draw frozen rows (top-right pane)
+     y = headerRowHeight + 0.5;
++    context.save();
++    context.beginPath();
++    context.rect(frozenX, headerRowHeight, this.width, frozenY - headerRowHeight);
++    context.clip();
+     for (let row = 1; row <= frozenRows; row += 1) {
+-      x = frozenX;
++      x = scrolledX;
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+       for (
+         let { column } = topLeftCell;
+@@ -1859,9 +2005,19 @@ export default class WorksheetCanvas {
+       }
+       y += rowHeight;
+     }
++    context.restore();
+ 
+     // Draw frozen columns (bottom-left pane)
+-    y = frozenY;
++    y = scrolledY;
++    context.save();
++    context.beginPath();
++    context.rect(
++      headerColumnWidth,
++      frozenY,
++      frozenX - headerColumnWidth,
++      this.height,
++    );
++    context.clip();
+     for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+       x = headerColumnWidth;
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+@@ -1874,11 +2030,16 @@ export default class WorksheetCanvas {
+       }
+       y += rowHeight;
+     }
++    context.restore();
+ 
+     // Render all remaining cells (bottom-right pane)
+-    y = frozenY;
++    y = scrolledY;
++    context.save();
++    context.beginPath();
++    context.rect(frozenX, frozenY, this.width, this.height);
++    context.clip();
+     for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+-      x = frozenX;
++      x = scrolledX;
+       const rowHeight = this.getRowHeight(selectedSheet, row);
+ 
+       for (
+@@ -1893,6 +2054,7 @@ export default class WorksheetCanvas {
+       }
+       y += rowHeight;
+     }
++    context.restore();
+ 
+     // Render all cell texts
+     for (const cell of this.cells) {

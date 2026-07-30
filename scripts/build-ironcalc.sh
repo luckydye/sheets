@@ -11,6 +11,9 @@
 #   WASM bindings and the React UI here from tag $IRONCALC_TAG guarantees the
 #   frontend WASM and the Tauri backend's `ironcalc = "0.7.1"` crate agree on .ic.
 #
+# Everything in patches/*.patch is applied to the clone before building, so local
+# fixes to the IronCalc UI survive a re-vendor. See patches/README.md.
+#
 # Requirements: rust + wasm32-unknown-unknown target, wasm-pack, bun (or npm), python3.
 set -euo pipefail
 
@@ -21,6 +24,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo ">> Cloning ironcalc @ $IRONCALC_TAG"
 git clone --depth 1 --branch "$IRONCALC_TAG" https://github.com/ironcalc/ironcalc "$WORK/ironcalc"
+
+echo ">> Applying local patches"
+for patch in "$REPO_ROOT"/patches/*.patch; do
+  echo "   $(basename "$patch")"
+  git -C "$WORK/ironcalc" apply "$patch"
+done
 
 echo ">> Building WASM bindings (wasm-pack --target web)"
 ( cd "$WORK/ironcalc/bindings/wasm" && wasm-pack build --target web --scope ironcalc --release )

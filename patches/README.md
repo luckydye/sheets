@@ -32,6 +32,30 @@ order, with `git apply`) to the freshly cloned IronCalc source at tag
   styles / the visible range are memoised per frame (each was fetched several
   times while drawing one).
 
+- **`0003-text-wrapping-cost.patch`** — stops re-wrapping text on every frame.
+  Applies on top of `0002`. Wrapping a cell measures it word by word, so a cell
+  with a few thousand characters costs thousands of canvas text measurements —
+  and the grid redrew every visible cell on every scroll event. In a Chrome CPU
+  profile of a workbook whose cells hold up to 32k characters (`wrapText` on),
+  `measureText` alone was 30% of all time. Three changes:
+  - The wrapped lines of a cell (and their widths) are cached and reused across
+    scroll frames. Only a scroll may reuse them — every other render re-wraps,
+    since it may follow an edit.
+  - Text hanging from the top of a cell is clipped at its bottom edge, so
+    wrapping stops once the cell is full instead of chewing through the rest.
+  - A line is measured whole before wrapping it word by word (the common case is
+    a line that already fits), but only its first 512 characters — enough to know
+    that a very long one does not fit.
+
+  **One rendering difference**, worth knowing about: when a cell contains a line
+  wider than the column *below* what fits in it — a long unbroken token, say a
+  URL — upstream used that invisible line to suppress the neighbouring cell's
+  left border. With wrapping now bounded, that border is drawn. It is a 1px
+  gridline; screenshots of the rest of the grid are pixel-identical. Dropping the
+  `lineBudget` in `computeCellText` (make it always `POSITIVE_INFINITY`) restores
+  upstream's output exactly, at the cost of a stall whenever a text-heavy cell
+  first scrolls into view.
+
 To rework a patch: clone `ironcalc` at the tag, `git apply` the patches up to the
 one you want, edit, then `git diff -- webapp/IronCalc/src > patches/<name>.patch`
 (`git commit` the earlier ones first so the diff only contains your change).
